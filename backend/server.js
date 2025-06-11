@@ -5,11 +5,19 @@ const bodyParser = require('body-parser');
 
 const app = express();
 const port = 3000;
+const path = require('path');
 
+// Serve index.html on root
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'frontend', 'index.html'));
+});
+
+// Middleware
 app.use(cors());
 app.use(bodyParser.json());
+app.use(express.static('frontend'));
 
-// MySQL connection setup
+// MySQL connection
 const db = mysql.createConnection({
   host: 'localhost',
   user: 'root',
@@ -22,7 +30,7 @@ db.connect(err => {
   console.log('✅ Connected to MySQL Database');
 });
 
-// Ensure heads table exists
+// Ensure 'heads' table exists
 db.query(`
   CREATE TABLE IF NOT EXISTS heads (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -30,17 +38,34 @@ db.query(`
   )
 `);
 
-// Route to insert cash entry
-app.post('/add-entry', (req, res) => {
-  const { date, head, cashIn, cashOut, transactionType, notes } = req.body;
+// Ensure 'entries' table exists
+db.query(`
+  CREATE TABLE IF NOT EXISTS entries (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    date DATE NOT NULL,
+    head VARCHAR(255) NOT NULL,
+    cashIn DECIMAL(10,2) DEFAULT 0,
+    cashOut DECIMAL(10,2) DEFAULT 0,
+    balance DECIMAL(10,2),
+    transactionType VARCHAR(50),
+    notes TEXT
+  )
+`);
 
-  if (!date || !head || transactionType === undefined || cashIn === undefined || cashOut === undefined) {
+// POST: Add cash entry
+app.post('/add-entry', (req, res) => {
+  const { date, head, cashIn = 0, cashOut = 0, transactionType, notes } = req.body;
+
+  if (!date || !head || !transactionType) {
     return res.status(400).json({ message: '❌ Missing required fields' });
   }
 
-  // Add head if it doesn't exist
-  db.query('INSERT IGNORE INTO heads (name) VALUES (?)', [head]);
+  // Add head if not exists
+  db.query('INSERT IGNORE INTO heads (name) VALUES (?)', [head], (err) => {
+    if (err) console.error('Error inserting head:', err);
+  });
 
+  // Get last balance
   db.query('SELECT balance FROM entries ORDER BY id DESC LIMIT 1', (err, results) => {
     if (err) return res.status(500).json({ message: '❌ Failed to fetch previous balance' });
 
@@ -60,7 +85,7 @@ app.post('/add-entry', (req, res) => {
   });
 });
 
-// Route to get all entries
+// GET: Fetch all entries
 app.get('/entries', (req, res) => {
   db.query('SELECT * FROM entries ORDER BY id ASC', (err, results) => {
     if (err) return res.status(500).json({ message: '❌ Failed to fetch entries' });
@@ -68,13 +93,14 @@ app.get('/entries', (req, res) => {
   });
 });
 
-// Route to delete an entry by ID and recalculate balances
+// DELETE: Remove entry by ID and update balances
 app.delete('/delete-entry/:id', (req, res) => {
   const { id } = req.params;
 
   db.query('DELETE FROM entries WHERE id = ?', [id], (err) => {
     if (err) return res.status(500).json({ message: '❌ Failed to delete entry' });
 
+    // Recalculate balances
     db.query('SELECT * FROM entries ORDER BY id ASC', (err, entries) => {
       if (err) return res.status(500).json({ message: '❌ Failed to fetch updated entries' });
 
@@ -98,7 +124,7 @@ app.delete('/delete-entry/:id', (req, res) => {
   });
 });
 
-// Route to get all unique heads
+// GET: Fetch unique heads
 app.get('/heads', (req, res) => {
   db.query('SELECT name FROM heads ORDER BY name ASC', (err, results) => {
     if (err) return res.status(500).json({ message: '❌ Failed to fetch heads' });
@@ -106,7 +132,7 @@ app.get('/heads', (req, res) => {
   });
 });
 
-// Start the server
+// Start server
 app.listen(port, () => {
   console.log(`🚀 Server running at http://localhost:${port}`);
 });

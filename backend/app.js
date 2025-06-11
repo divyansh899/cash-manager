@@ -44,26 +44,33 @@ db.query(`
   )
 `);
 
-// Add entry
+// Add entry with correct balance calculation
 app.post('/add-entry', (req, res) => {
   const { date, head, cashIn, cashOut, transactionType, notes } = req.body;
 
-  // Temporarily store balance as 0; will be updated in GET
-  const query = `
-    INSERT INTO entries (date, head, cashIn, cashOut, balance, transactionType, notes)
-    VALUES (?, ?, ?, ?, 0, ?, ?)
-  `;
+  db.query('SELECT balance FROM entries ORDER BY id DESC LIMIT 1', (err, results) => {
+    if (err) return res.status(500).json({ message: 'Failed to fetch previous balance' });
 
-  db.query(query, [date, head, cashIn, cashOut, transactionType, notes], (err, result) => {
-    if (err) {
-      console.error(err);
-      return res.status(500).json({ message: 'Failed to add entry' });
-    }
-    res.json({ message: 'Entry added successfully' });
+    const prevBalance = results.length ? parseFloat(results[0].balance) : 0;
+    const newBalance = prevBalance + (parseFloat(cashIn) || 0) - (parseFloat(cashOut) || 0);
+
+    const query = `
+      INSERT INTO entries (date, head, cashIn, cashOut, balance, transactionType, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `;
+    const values = [date, head, cashIn, cashOut, newBalance, transactionType, notes];
+
+    db.query(query, values, (err, result) => {
+      if (err) {
+        console.error(err);
+        return res.status(500).json({ message: 'Failed to add entry' });
+      }
+      res.json({ message: 'Entry added successfully' });
+    });
   });
 });
 
-// Get all entries with running balance
+// Get all entries with accurate running balance
 app.get('/entries', (req, res) => {
   db.query('SELECT * FROM entries ORDER BY id ASC', (err, results) => {
     if (err) return res.status(500).json({ message: 'Error fetching entries' });
@@ -71,22 +78,38 @@ app.get('/entries', (req, res) => {
     let runningBalance = 0;
     const updatedResults = results.map(entry => {
       runningBalance += parseFloat(entry.cashIn) - parseFloat(entry.cashOut);
-      return {
-        ...entry,
-        balance: runningBalance
-      };
+      entry.balance = runningBalance;
+      return entry;
     });
 
     res.json(updatedResults);
   });
 });
 
-// Delete an entry and reassign balances on frontend
+// Delete entry and recalculate balances
 app.delete('/delete-entry/:id', (req, res) => {
   const { id } = req.params;
-  db.query('DELETE FROM entries WHERE id = ?', [id], (err, result) => {
+  db.query('DELETE FROM entries WHERE id = ?', [id], (err) => {
     if (err) return res.status(500).json({ message: 'Failed to delete entry' });
-    res.json({ message: 'Entry deleted successfully' });
+
+    db.query('SELECT * FROM entries ORDER BY id ASC', (err, entries) => {
+      if (err) return res.status(500).json({ message: 'Error refetching entries' });
+
+      let runningBalance = 0;
+      const updates = entries.map(entry => {
+        runningBalance += parseFloat(entry.cashIn) - parseFloat(entry.cashOut);
+        return new Promise((resolve, reject) => {
+          db.query('UPDATE entries SET balance = ? WHERE id = ?', [runningBalance, entry.id], err => {
+            if (err) reject(err);
+            else resolve();
+          });
+        });
+      });
+
+      Promise.all(updates)
+        .then(() => res.json({ message: 'Entry deleted and balances updated' }))
+        .catch(err => res.status(500).json({ message: 'Balance recalculation failed' }));
+    });
   });
 });
 
