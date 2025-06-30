@@ -2,10 +2,11 @@ const express = require('express');
 const mysql = require('mysql2');
 const cors = require('cors');
 const bodyParser = require('body-parser');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 const port = 3000;
-const path = require('path');
 
 // Serve index.html on root
 app.get('/', (req, res) => {
@@ -85,9 +86,29 @@ app.post('/add-entry', (req, res) => {
   });
 });
 
-// GET: Fetch all entries
+// ✅ GET: Fetch entries (with optional filter by date/head)
 app.get('/entries', (req, res) => {
-  db.query('SELECT * FROM entries ORDER BY id ASC', (err, results) => {
+  const { date, head } = req.query;
+
+  let sql = 'SELECT * FROM entries';
+  const params = [];
+
+  if (date || head) {
+    sql += ' WHERE';
+    if (date) {
+      sql += ' date = ?';
+      params.push(date);
+    }
+    if (head) {
+      if (date) sql += ' AND';
+      sql += ' head = ?';
+      params.push(head);
+    }
+  }
+
+  sql += ' ORDER BY id ASC';
+
+  db.query(sql, params, (err, results) => {
     if (err) return res.status(500).json({ message: '❌ Failed to fetch entries' });
     res.json(results);
   });
@@ -129,6 +150,39 @@ app.get('/heads', (req, res) => {
   db.query('SELECT name FROM heads ORDER BY name ASC', (err, results) => {
     if (err) return res.status(500).json({ message: '❌ Failed to fetch heads' });
     res.json(results.map(row => row.name));
+  });
+});
+
+// Export data to CSV
+app.get('/export', (req, res) => {
+  const query = 'SELECT * FROM entries';
+
+  db.query(query, (err, results) => {
+    if (err) return res.status(500).send('Database error');
+    if (results.length === 0) return res.send('No data to export');
+
+    const csvRows = [];
+    const headers = Object.keys(results[0]).join(',');
+    csvRows.push(headers);
+
+    results.forEach(row => {
+      const values = Object.values(row).map(val =>
+        typeof val === 'string' && val.includes(',') ? `"${val}"` : val
+      );
+      csvRows.push(values.join(','));
+    });
+
+    const csvContent = csvRows.join('\n');
+    const filePath = path.join(__dirname, 'export.csv');
+
+    fs.writeFile(filePath, csvContent, (err) => {
+      if (err) return res.status(500).send('File write error');
+
+      res.download(filePath, 'cash_data.csv', (err) => {
+        if (err) console.error('Download error:', err);
+        fs.unlink(filePath, () => {}); // delete file after download
+      });
+    });
   });
 });
 

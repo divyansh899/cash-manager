@@ -70,9 +70,30 @@ app.post('/add-entry', (req, res) => {
   });
 });
 
-// Get all entries with accurate running balance
+// Get all entries with accurate running balance (sorted by date)
 app.get('/entries', (req, res) => {
-  db.query('SELECT * FROM entries ORDER BY id ASC', (err, results) => {
+  const { date, head } = req.query;
+
+  let sql = 'SELECT * FROM entries';
+  const params = [];
+
+  if (date || head) {
+    sql += ' WHERE';
+    if (date) {
+      sql += ' date = ?';
+      params.push(date);
+    }
+    if (head) {
+      if (date) sql += ' AND';
+      sql += ' head = ?';
+      params.push(head);
+    }
+  }
+
+  // 👇 ORDER BY date instead of id
+  sql += ' ORDER BY date ASC, id ASC';
+
+  db.query(sql, params, (err, results) => {
     if (err) return res.status(500).json({ message: 'Error fetching entries' });
 
     let runningBalance = 0;
@@ -86,13 +107,14 @@ app.get('/entries', (req, res) => {
   });
 });
 
-// Delete entry and recalculate balances
+
+// Delete entry and recalculate balances (sorted by date)
 app.delete('/delete-entry/:id', (req, res) => {
   const { id } = req.params;
   db.query('DELETE FROM entries WHERE id = ?', [id], (err) => {
     if (err) return res.status(500).json({ message: 'Failed to delete entry' });
 
-    db.query('SELECT * FROM entries ORDER BY id ASC', (err, entries) => {
+    db.query('SELECT * FROM entries ORDER BY date ASC, id ASC', (err, entries) => {
       if (err) return res.status(500).json({ message: 'Error refetching entries' });
 
       let runningBalance = 0;
